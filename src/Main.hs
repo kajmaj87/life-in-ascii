@@ -1,73 +1,66 @@
+{-# LANGUAGE FlexibleInstances     #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE ScopedTypeVariables   #-}
+{-# LANGUAGE TemplateHaskell       #-}
+{-# LANGUAGE TypeFamilies          #-}
+{-# LANGUAGE OverloadedStrings     #-}
+
 module Main where
-import           System.IO                      ( stdin
-                                                , hSetEcho
-                                                , hSetBuffering
-                                                , BufferMode(..)
-                                                )
+
+import           Apecs
+import           Linear                         ( V2(..) )
+import           Control.Monad
+import qualified System.Terminal               as T
+
+newtype Position = Position (V2 Int) deriving Show
+newtype Velocity = Velocity (V2 Int) deriving Show
+newtype Tile = Tile Char deriving Show
+data Flying = Flying
+
+
+makeWorldAndComponents "World" [''Position, ''Tile, ''Velocity, ''Flying]
+
+initialise :: System World ()
+initialise = do
+  newEntity (Position 0, Tile 'v', Velocity 1)
+  newEntity (Position 2, Tile 'w', Velocity 1)
+  newEntity (Position 1, Tile 'f', Velocity 2, Flying)
+
+  -- 1. Add velocity to position
+  -- 2. Apply gravity to non-flying entities
+  -- 3. Print a list of entities and their positions
+  -- cmap $ \(Position p, Velocity v) -> Position (v + p)
+  -- cmap $ \(Velocity v, _ :: Not Flying) -> Velocity (v - V2 0 1)
+  -- cmapM_ $ \(Position p, Entity e) -> liftIO . print $ (e, p)
+  return ()
+
+step :: System World ()
+step = cmap $ \(Position p, Velocity v) -> Position (v + p)
+
+draw :: System World ()
+draw =
+  cmapM_ $ \(Position (V2 x y), Tile c) -> liftIO (drawCharOnTerminal c x y)
+
+drawChar :: T.MonadScreen m => Char -> Int -> Int -> m ()
+drawChar c x y = do
+  T.setCursorPosition $ T.Position y x
+  T.putChar c
+
+loop :: World -> Int -> IO ()
+loop world turns = do
+  runSystem step world
+  runSystem draw world
+  onTerminal T.flush
+
+  when (turns > 0) $ loop world (turns - 1)
+
+drawCharOnTerminal c x y = onTerminal (drawChar c x y)
+
+onTerminal f = T.withTerminal $ T.runTerminalT $ f
+
 
 main :: IO ()
 main = do
-  hSetBuffering stdin NoBuffering
-  hSetEcho stdin False
-  draw $ e $ initGame ()
-
-
-
-draw :: [Entity] -> IO ()
-draw = mapM_ drawEntity
-
-drawEntity :: Entity -> IO ()
-drawEntity entity = case render entity of
-  Just (Render (x, y) c) -> drawChar x y c
-  _                      -> return ()
-
-drawChar :: Int -> Int -> Char -> IO ()
-drawChar x y c = case maybeMove x y of
-  ""         -> return ()
-  escapeCode -> putStr $ escapeCode ++ [c]
-
-maybeMove :: Int -> Int -> String
-maybeMove x y
-  | y > 0
-  , x > 0
-  = let escapeCode = "[" ++ show y ++ ";" ++ show x ++ "f"
-    in  "\ESC" ++ escapeCode
-  | otherwise
-  = ""
-
-data Game = Game { e :: [Entity] }
-data Entity = Entity { components :: [Component] }
-
-type Position = (Int, Int)
-data Component = Render Position Char | Alive | Food FoodType
-data FoodType = Meat | Plant
-
-render :: Entity -> Maybe Component
-render entity =
-  let findRender (x : xs) = case x of
-        Render _ _ -> Just x
-        _          -> findRender xs
-      findRender [] = Nothing
-  in  findRender $ components entity
-
-
-
-floorTile :: Int -> Int -> Entity
-floorTile x y = Entity { components = [Render (x, y) '.'] }
-
-meatTile :: Int -> Int -> Entity
-meatTile x y = Entity { components = [Food Meat, Render (x, y) '%'] }
-
-plantTile :: Int -> Int -> Entity
-plantTile x y = Entity { components = [Food Plant, Render (x, y) '&'] }
-
-animal :: Int -> Int -> Entity
-animal x y = Entity { components = [Food Meat, Render (x, y) '*'] }
-
-generateLevel :: Int -> Int -> [Entity]
-generateLevel xmax ymax =
-  [ floorTile x y | x <- [1 .. xmax], y <- [1 .. ymax] ]
-    ++ [meatTile 10 10, meatTile 15 5, plantTile 5 15, plantTile 18 20]
-
-initGame :: () -> Game
-initGame _ = Game { e = generateLevel 40 20 }
+  world <- initWorld
+  runSystem initialise world
+  loop world 10
