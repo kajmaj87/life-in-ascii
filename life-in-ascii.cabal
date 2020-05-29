@@ -21,6 +21,7 @@ executable life-in-ascii
     apecs,
     linear,
     terminal,
+    random,
     exceptions
   ghc-options: 
     -Wall
