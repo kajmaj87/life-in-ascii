@@ -14,7 +14,6 @@ module Main where
 import           Apecs
 import           Linear                         ( V2(..) )
 import           Control.Monad
-import qualified Control.Monad.Fail            as Fail
 import qualified System.Terminal               as T
 import qualified Data.Map                      as M
 import           System.Random
@@ -68,7 +67,8 @@ type All = (Position, Tile, Solid, Physical, TTL, Growing)
 
 data Direction = Horizontal | Vertical
 
-growthRate = 15
+growthRate :: Int
+growthRate = 30
 
 makeWorld "World" [''Position, ''Tile, ''Solid, ''Physical, ''TTL, ''Growing, ''Time, ''VisibleTiles, ''Log]
 
@@ -76,8 +76,8 @@ initialise :: System World ()
 initialise = do
   room 0 1 40 20
   emptyFloor 1 2 39 19
-  grass 15 13 0
-  grass 35 3 0
+  _ <- grass 15 13 0
+  _ <- grass 35 3 0
   wall 10 10 10 Horizontal
   wall 10 15 10 Horizontal
   wall 10 11 2  Vertical
@@ -131,15 +131,13 @@ step = do
           )
           False
         if spaceOccupied
-          then do
-            return ()
+          then return ()
           else do
-            period <- liftIO $ randomRIO (0, growthRate)
-            grass (x + dx) (y + dy) period
+            randomPeriod <- liftIO $ randomRIO (0, growthRate)
+            _            <- grass (x + dx) (y + dy) randomPeriod
             return ()
         pure (Position (V2 x y), Growing period current)
-      else do
-        pure (Position (V2 x y), Growing period current)
+      else pure (Position (V2 x y), Growing period current)
 
 
 updateVisibleMap :: System World ()
@@ -164,15 +162,13 @@ updateVisibleMap = do
   set global (VisibleTiles newTiles)
 
   mapM_
-    (\((Position (V2 x y)), (Tile c z)) -> liftIO (drawCharOnTerminal c x y))
+    (\((Position (V2 x y)), (Tile c _)) -> liftIO (drawCharOnTerminal c x y))
     (M.toList
       (M.differenceWith (\new old -> if old == new then Nothing else Just new)
                         newTiles
                         oldTiles
       )
     )
-
-  return ()
 
 logging :: System World ()
 logging = do
@@ -187,7 +183,7 @@ logging = do
     )
   Log logs <- get global
   case logs of
-    x : xs -> do
+    x : _ -> do
       liftIO (onTerminal (drawString x 1 22))
       return ()
     [] -> return ()
@@ -197,6 +193,7 @@ drawChar c x y = do
   T.setCursorPosition $ T.Position y x
   T.putChar c
 
+drawString :: T.MonadScreen m => String -> Int -> Int -> m ()
 drawString s x y = do
   T.setCursorPosition $ T.Position y x
   T.putStringLn s
