@@ -35,6 +35,9 @@ instance Component Growing where
 data Solid = Solid
 instance Component Solid where
   type Storage Solid = Map Solid
+data Physical = Physical
+instance Component Physical where
+  type Storage Physical = Map Physical
 
 newtype VisibleTiles = VisibleTiles (M.Map Position Tile)
 instance Semigroup VisibleTiles where
@@ -54,14 +57,19 @@ instance Component Time where
 
 type All = (Position, Tile, Solid, TTL, Growing)
 
-makeWorld "World" [''Position, ''Tile, ''Solid, ''TTL, ''Growing, ''Time, ''VisibleTiles]
+data Direction = Horizontal | Vertical
+
+makeWorld "World" [''Position, ''Tile, ''Solid, ''Physical, ''TTL, ''Growing, ''Time, ''VisibleTiles]
 
 initialise :: System World ()
 initialise = do
   room 0 1 40 20
   emptyFloor 1 2 39 19
-  grass 10 10
-  grass 20 15
+  grass 15 13
+  wall 10 10 10 Horizontal
+  wall 10 15 10 Horizontal
+  wall 10 11 2  Vertical
+  wall 20 12 2  Vertical
   -- 1. Add velocity to position
   -- 2. Apply gravity to non-flying entities
   -- 3. Print a list of entities and their positions
@@ -70,14 +78,19 @@ initialise = do
   -- cmapM_ $ \(Position p, Entity e) -> liftIO . print $ (e, p)
   return ()
 
-grass x y = newEntity (Position (V2 x y), Tile '.' 1, Growing 20 0, TTL 50)
+grass x y =
+  newEntity (Position (V2 x y), Tile '.' 1, Growing 15 0, TTL 50, Physical)
 
-wall x y = newEntity (Position (V2 x y), Tile '#' 10, Solid)
+brick x y = newEntity (Position (V2 x y), Tile '#' 10, Solid, Physical)
+wall xs ys n Horizontal =
+  mapM_ (uncurry brick) [ (x, ys) | x <- [xs .. (xs + n)] ]
+wall xs ys n Vertical =
+  mapM_ (uncurry brick) [ (xs, y) | y <- [ys .. (ys + n)] ]
 
-emptySpace x y = newEntity (Position (V2 x y), Tile ' ' 0, Solid)
---room :: Int -> Int -> Int -> Int -> SystemT w m ()
+emptySpace x y = newEntity (Position (V2 x y), Tile ' ' 0)
+
 room xmin ymin xmax ymax = mapM_
-  (uncurry wall)
+  (uncurry brick)
   (  [ (x, y) | x <- [xmin, xmax], y <- [ymin .. ymax] ]
   ++ [ (x, y) | x <- [(xmin + 1) .. (xmax - 1)], y <- [ymin, ymax] ]
   )
@@ -97,9 +110,19 @@ step = do
       then do
       --  newEntity (Position (V2 (x + 1) (y + 1)), Growing period (current + 1))
            --pure (Position (V2 (x + 1) y), Growing period current)
-        dx <- liftIO $ randomRIO (-1, 1)
-        dy <- liftIO $ randomRIO (-1, 1)
-        _  <- grass (x + dx) (y + dy)
+        dx            <- liftIO $ randomRIO (-1, 1)
+        dy            <- liftIO $ randomRIO (-1, 1)
+        spaceOccupied <- cfold
+          (\acc (Position (V2 px py), Physical) ->
+            acc || (px == (x + dx) && py == (y + dy))
+          )
+          False
+        if spaceOccupied
+          then do
+            return ()
+          else do
+            grass (x + dx) (y + dy)
+            return ()
         pure (Position (V2 x y), Growing period current)
       else do
         pure (Position (V2 x y), Growing period current)
@@ -161,4 +184,5 @@ main = do
   world <- initWorld
   onTerminal T.hideCursor
   runSystem initialise world
-  loop world 200
+  loop world 500
+  drawCharOnTerminal 'E' 1 21
