@@ -14,6 +14,7 @@ module Main where
 import           Apecs
 import           Linear                         ( V2(..) )
 import           Control.Monad
+import qualified Control.Monad.Fail            as Fail
 import qualified System.Terminal               as T
 import qualified Data.Map                      as M
 import           System.Random
@@ -43,7 +44,7 @@ newtype VisibleTiles = VisibleTiles (M.Map Position Tile)
 instance Semigroup VisibleTiles where
   (VisibleTiles a) <> (VisibleTiles b) = VisibleTiles (M.union a b)
 instance Monoid VisibleTiles where
-  mempty = VisibleTiles (M.empty)
+  mempty = VisibleTiles M.empty
 instance Component VisibleTiles where
   type Storage VisibleTiles = Global VisibleTiles
 
@@ -55,20 +56,31 @@ instance Monoid Time where
 instance Component Time where
   type Storage Time = Global Time
 
+newtype Log = Log [String] deriving (Show)
+instance Semigroup Log where
+  (Log a) <> (Log b) = Log (a ++ b)
+instance Monoid Log where
+  mempty = Log []
+instance Component Log where
+  type Storage Log = Global Log
+
 type All = (Position, Tile, Solid, Physical, TTL, Growing)
 
 data Direction = Horizontal | Vertical
 
-makeWorld "World" [''Position, ''Tile, ''Solid, ''Physical, ''TTL, ''Growing, ''Time, ''VisibleTiles]
+growthRate = 15
+
+makeWorld "World" [''Position, ''Tile, ''Solid, ''Physical, ''TTL, ''Growing, ''Time, ''VisibleTiles, ''Log]
 
 initialise :: System World ()
 initialise = do
   room 0 1 40 20
   emptyFloor 1 2 39 19
-  grass 15 13
+  grass 15 13 0
+  grass 35 3 0
   wall 10 10 10 Horizontal
   wall 10 15 10 Horizontal
-  wall 10 11 3  Vertical
+  wall 10 11 2  Vertical
   wall 20 11 3  Vertical
   -- 1. Add velocity to position
   -- 2. Apply gravity to non-flying entities
@@ -78,8 +90,8 @@ initialise = do
   -- cmapM_ $ \(Position p, Entity e) -> liftIO . print $ (e, p)
   return ()
 
-grass x y =
-  newEntity (Position (V2 x y), Tile '.' 1, Growing 15 0, TTL 50, Physical)
+grass x y p = newEntity
+  (Position (V2 x y), Tile '.' 1, Growing growthRate p, TTL 50, Physical)
 
 brick x y = newEntity (Position (V2 x y), Tile '#' 10, Solid, Physical)
 wall xs ys n Horizontal =
@@ -100,6 +112,7 @@ emptyFloor xmin ymin xmax ymax =
 
 step :: System World ()
 step = do
+  modify global (\(Time turns) -> Time (turns + 1))
   -- get older and die eventually
   cmap $ \(TTL turns) ->
     if turns < 0 then Right $ Not @All else Left $ TTL (turns - 1)
@@ -121,7 +134,8 @@ step = do
           then do
             return ()
           else do
-            grass (x + dx) (y + dy)
+            period <- liftIO $ randomRIO (0, growthRate)
+            grass (x + dx) (y + dy) period
             return ()
         pure (Position (V2 x y), Growing period current)
       else do
@@ -160,16 +174,38 @@ updateVisibleMap = do
 
   return ()
 
+logging :: System World ()
+logging = do
+  Time turn       <- get global
+  growingEntities <- cfold (\acc (Growing _ _) -> acc + 1) 0
+  modify
+    global
+    (\(Log xs) -> Log
+      ( ("Current turn: " ++ show turn ++ " Entities: " ++ show growingEntities)
+      : xs
+      )
+    )
+  Log logs <- get global
+  case logs of
+    x : xs -> do
+      liftIO (onTerminal (drawString x 1 22))
+      return ()
+    [] -> return ()
 
 drawChar :: T.MonadScreen m => Char -> Int -> Int -> m ()
 drawChar c x y = do
   T.setCursorPosition $ T.Position y x
   T.putChar c
 
+drawString s x y = do
+  T.setCursorPosition $ T.Position y x
+  T.putStringLn s
+
 loop :: World -> Int -> IO ()
 loop world turns = do
   runSystem step             world
   runSystem updateVisibleMap world
+  runSystem logging          world
   onTerminal T.flush
 
   when (turns > 0) $ loop world (turns - 1)
