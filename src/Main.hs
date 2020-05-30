@@ -52,11 +52,14 @@ instance Monoid Time where
 instance Component Time where
   type Storage Time = Global Time
 
+type All = (Position, Tile, Solid, TTL, Growing)
+
 makeWorld "World" [''Position, ''Tile, ''Solid, ''TTL, ''Growing, ''Time, ''VisibleTiles]
 
 initialise :: System World ()
 initialise = do
   room 0 1 40 20
+  emptyFloor 1 2 39 19
   grass 10 10
   grass 20 15
   -- 1. Add velocity to position
@@ -67,9 +70,11 @@ initialise = do
   -- cmapM_ $ \(Position p, Entity e) -> liftIO . print $ (e, p)
   return ()
 
-grass x y = newEntity (Position (V2 x y), Tile '.' 0, Growing 10 1, TTL 50)
+grass x y = newEntity (Position (V2 x y), Tile '.' 1, Growing 20 0, TTL 50)
 
-wall x y = newEntity (Position (V2 x y), Tile '#' 1, Solid)
+wall x y = newEntity (Position (V2 x y), Tile '#' 10, Solid)
+
+emptySpace x y = newEntity (Position (V2 x y), Tile ' ' 0, Solid)
 --room :: Int -> Int -> Int -> Int -> SystemT w m ()
 room xmin ymin xmax ymax = mapM_
   (uncurry wall)
@@ -77,11 +82,14 @@ room xmin ymin xmax ymax = mapM_
   ++ [ (x, y) | x <- [(xmin + 1) .. (xmax - 1)], y <- [ymin, ymax] ]
   )
 
+emptyFloor xmin ymin xmax ymax =
+  mapM_ (uncurry emptySpace) [ (x, y) | x <- [xmin, xmax], y <- [ymin .. ymax] ]
+
 step :: System World ()
 step = do
-  -- get older
-  cmap $ \(TTL turns, Tile c z) ->
-    if turns > 0 then (TTL $ turns - 1, Tile c z) else (TTL 0, Tile '!' 10)
+  -- get older and die eventually
+  cmap $ \(TTL turns) ->
+    if turns < 0 then Right $ Not @All else Left $ TTL (turns - 1)
   -- grow 
   cmap $ \(Growing period current) -> Growing period (current + 1)
   cmapM $ \(Position (V2 x y), Growing period current) ->
