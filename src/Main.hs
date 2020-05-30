@@ -1,10 +1,13 @@
-{-# LANGUAGE FlexibleInstances     #-}
-{-# LANGUAGE FlexibleContexts      #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE ScopedTypeVariables   #-}
-{-# LANGUAGE TemplateHaskell       #-}
-{-# LANGUAGE TypeFamilies          #-}
-{-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE OverloadedStrings          #-}
+{-# LANGUAGE DataKinds                  #-}
+{-# LANGUAGE FlexibleContexts           #-}
+{-# LANGUAGE FlexibleInstances          #-}
+{-# LANGUAGE MultiParamTypeClasses      #-}
+{-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE TemplateHaskell            #-}
+{-# LANGUAGE TypeApplications           #-}
+{-# LANGUAGE TypeFamilies               #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Main where
 
@@ -12,18 +15,44 @@ import           Apecs
 import           Linear                         ( V2(..) )
 import           Control.Monad
 import qualified System.Terminal               as T
+import qualified Data.Map                      as M
 import           System.Random
 
-newtype Position = Position (V2 Int) deriving Show
-newtype Tile = Tile Char deriving Show
+newtype Position = Position (V2 Int) deriving (Show, Ord, Eq)
+instance Component Position where
+  type Storage Position = Map Position
+
+data Tile = Tile Char Int deriving (Show, Eq)
+instance Component Tile where
+  type Storage Tile = Map Tile
+
 newtype TTL = TTL Int
+instance Component TTL where
+  type Storage TTL = Map TTL
 data Growing = Growing Int Int
-data Split = Split
-data Alive = Alive
+instance Component Growing where
+  type Storage Growing = Map Growing
 data Solid = Solid
+instance Component Solid where
+  type Storage Solid = Map Solid
 
+newtype VisibleTiles = VisibleTiles (M.Map Position Tile)
+instance Semigroup VisibleTiles where
+  (VisibleTiles a) <> (VisibleTiles b) = VisibleTiles (M.union a b)
+instance Monoid VisibleTiles where
+  mempty = VisibleTiles (M.empty)
+instance Component VisibleTiles where
+  type Storage VisibleTiles = Global VisibleTiles
 
-makeWorldAndComponents "World" [''Position, ''Tile, ''Solid, ''TTL, ''Alive, ''Growing, ''Split]
+newtype Time = Time Float deriving (Show, Num)
+instance Semigroup Time where
+  (<>) = (+)
+instance Monoid Time where
+  mempty = 0
+instance Component Time where
+  type Storage Time = Global Time
+
+makeWorld "World" [''Position, ''Tile, ''Solid, ''TTL, ''Growing, ''Time, ''VisibleTiles]
 
 initialise :: System World ()
 initialise = do
@@ -38,9 +67,9 @@ initialise = do
   -- cmapM_ $ \(Position p, Entity e) -> liftIO . print $ (e, p)
   return ()
 
-grass x y = newEntity (Position (V2 x y), Tile '.', Growing 10 1, TTL 50)
+grass x y = newEntity (Position (V2 x y), Tile '.' 0, Growing 10 1, TTL 50)
 
-wall x y = newEntity (Position (V2 x y), Tile '#', Solid)
+wall x y = newEntity (Position (V2 x y), Tile '#' 1, Solid)
 --room :: Int -> Int -> Int -> Int -> SystemT w m ()
 room xmin ymin xmax ymax = mapM_
   (uncurry wall)
@@ -51,8 +80,8 @@ room xmin ymin xmax ymax = mapM_
 step :: System World ()
 step = do
   -- get older
-  cmap $ \(TTL turns, Tile c) ->
-    if turns > 0 then (TTL $ turns - 1, Tile c) else (TTL 0, Tile '!')
+  cmap $ \(TTL turns, Tile c z) ->
+    if turns > 0 then (TTL $ turns - 1, Tile c z) else (TTL 0, Tile '!' 10)
   -- grow 
   cmap $ \(Growing period current) -> Growing period (current + 1)
   cmapM $ \(Position (V2 x y), Growing period current) ->
@@ -68,9 +97,38 @@ step = do
         pure (Position (V2 x y), Growing period current)
 
 
-draw :: System World ()
-draw =
-  cmapM_ $ \(Position (V2 x y), Tile c) -> liftIO (drawCharOnTerminal c x y)
+updateVisibleMap :: System World ()
+updateVisibleMap = do
+  --result <- cmapM_
+   -- $ \(Position (V2 x y), Tile c z) -> liftIO (drawCharOnTerminal c x y)
+  --cfold $ (\(VisibleTiles acc) (Position p, Tile c z) -> VisibleTiles (M.insert (Position p) (Tile c z) acc)) mempty
+  VisibleTiles newTiles <- cfold
+    (\(VisibleTiles acc) (Position p, Tile c z) -> VisibleTiles
+      (M.insertWith
+        (\(Tile c1 z1) (Tile c2 z2) ->
+          if z1 > z2 then Tile c1 z1 else Tile c2 z2
+        )
+        (Position p)
+        (Tile c z)
+        acc
+      )
+    )
+    mempty
+
+  VisibleTiles oldTiles <- get global
+  set global (VisibleTiles newTiles)
+
+  mapM_
+    (\((Position (V2 x y)), (Tile c z)) -> liftIO (drawCharOnTerminal c x y))
+    (M.toList
+      (M.differenceWith (\new old -> if old == new then Nothing else Just new)
+                        newTiles
+                        oldTiles
+      )
+    )
+
+  return ()
+
 
 drawChar :: T.MonadScreen m => Char -> Int -> Int -> m ()
 drawChar c x y = do
@@ -79,8 +137,8 @@ drawChar c x y = do
 
 loop :: World -> Int -> IO ()
 loop world turns = do
-  runSystem step world
-  runSystem draw world
+  runSystem step             world
+  runSystem updateVisibleMap world
   onTerminal T.flush
 
   when (turns > 0) $ loop world (turns - 1)
@@ -95,4 +153,4 @@ main = do
   world <- initWorld
   onTerminal T.hideCursor
   runSystem initialise world
-  loop world 100
+  loop world 200
