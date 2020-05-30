@@ -55,7 +55,7 @@ instance Monoid Time where
 instance Component Time where
   type Storage Time = Global Time
 
-type All = (Position, Tile, Solid, TTL, Growing)
+type All = (Position, Tile, Solid, Physical, TTL, Growing)
 
 data Direction = Horizontal | Vertical
 
@@ -184,5 +184,5 @@ main = do
   world <- initWorld
   onTerminal T.hideCursor
   runSystem initialise world
-  loop world 500
+  loop world 700
   drawCharOnTerminal 'E' 1 21
