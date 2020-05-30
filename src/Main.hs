@@ -68,8 +68,8 @@ initialise = do
   grass 15 13
   wall 10 10 10 Horizontal
   wall 10 15 10 Horizontal
-  wall 10 11 2  Vertical
-  wall 20 12 2  Vertical
+  wall 10 11 3  Vertical
+  wall 20 11 3  Vertical
   -- 1. Add velocity to position
   -- 2. Apply gravity to non-flying entities
   -- 3. Print a list of entities and their positions
@@ -183,6 +183,7 @@ main :: IO ()
 main = do
   world <- initWorld
   onTerminal T.hideCursor
+  onTerminal $ T.eraseInDisplay T.EraseAll
   runSystem initialise world
-  loop world 700
+  loop world 1000
   drawCharOnTerminal 'E' 1 21
