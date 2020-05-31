@@ -29,12 +29,19 @@ instance Component Tile where
 newtype TTL = TTL Int
 instance Component TTL where
   type Storage TTL = Map TTL
+
 data Growing = Growing Int Int
 instance Component Growing where
   type Storage Growing = Map Growing
+
+data Moving = Moving
+instance Component Moving where
+  type Storage Moving = Map Moving
+
 data Solid = Solid
 instance Component Solid where
   type Storage Solid = Map Solid
+
 data Physical = Physical
 instance Component Physical where
   type Storage Physical = Map Physical
@@ -63,35 +70,41 @@ instance Monoid Log where
 instance Component Log where
   type Storage Log = Global Log
 
-type All = (Position, Tile, Solid, Physical, TTL, Growing)
+type All = (Position, Tile, Solid, Physical, TTL, Growing, Moving)
 
 data Direction = Horizontal | Vertical
 
 growthRate :: Int
-growthRate = 30
+growthRate = 25
 
-makeWorld "World" [''Position, ''Tile, ''Solid, ''Physical, ''TTL, ''Growing, ''Time, ''VisibleTiles, ''Log]
+grassMaxAge = 50
+bunnyMaxAge = 500
+
+makeWorld "World" [''Position, ''Tile, ''Solid, ''Physical, ''TTL, ''Growing, ''Moving, ''Time, ''VisibleTiles, ''Log]
 
 initialise :: System World ()
 initialise = do
   room 0 1 40 20
   emptyFloor 1 2 39 19
-  _ <- grass 15 13 0
+  -- _ <- grass 15 13 0
   _ <- grass 35 3 0
+  bunny 14 12
   wall 10 10 10 Horizontal
   wall 10 15 10 Horizontal
   wall 10 11 2  Vertical
   wall 20 11 3  Vertical
-  -- 1. Add velocity to position
-  -- 2. Apply gravity to non-flying entities
-  -- 3. Print a list of entities and their positions
-  -- cmap $ \(Position p, Velocity v) -> Position (v + p)
-  -- cmap $ \(Velocity v, _ :: Not Flying) -> Velocity (v - V2 0 1)
-  -- cmapM_ $ \(Position p, Entity e) -> liftIO . print $ (e, p)
   return ()
 
 grass x y p = newEntity
-  (Position (V2 x y), Tile '.' 1, Growing growthRate p, TTL 50, Physical)
+  ( Position (V2 x y)
+  , Tile '.' 1
+  , Growing growthRate p
+  , TTL grassMaxAge
+  , Physical
+  )
+
+bunny x y =
+  newEntity (Position (V2 x y), Tile 'b' 2, Physical, TTL bunnyMaxAge, Moving)
 
 brick x y = newEntity (Position (V2 x y), Tile '#' 10, Solid, Physical)
 wall xs ys n Horizontal =
@@ -107,44 +120,58 @@ room xmin ymin xmax ymax = mapM_
   ++ [ (x, y) | x <- [(xmin + 1) .. (xmax - 1)], y <- [ymin, ymax] ]
   )
 
-emptyFloor xmin ymin xmax ymax =
-  mapM_ (uncurry emptySpace) [ (x, y) | x <- [xmin, xmax], y <- [ymin .. ymax] ]
+emptyFloor xmin ymin xmax ymax = mapM_
+  (uncurry emptySpace)
+  [ (x, y) | x <- [xmin .. xmax], y <- [ymin .. ymax] ]
 
-step :: System World ()
-step = do
+step :: World -> System World ()
+step world = do
   modify global (\(Time turns) -> Time (turns + 1))
   -- get older and die eventually
   cmap $ \(TTL turns) ->
     if turns < 0 then Right $ Not @All else Left $ TTL (turns - 1)
+  liftIO $ runSystem grow world
+  return ()
+
+move :: System World ()
+move = cmapM $ \(Moving, Position p) -> do
+  newPosition <- moveIfPossible (Position p)
+  return (Moving, newPosition)
+
+-- returns current position if move impossible
+moveIfPossible :: Position -> System World Position
+moveIfPossible (Position (V2 x y)) = do
+  dx            <- liftIO $ randomRIO (-1, 1)
+  dy            <- liftIO $ randomRIO (-1, 1)
+  spaceOccupied <- cfold
+    (\acc (Position (V2 px py), Physical) ->
+      acc || (px == (x + dx) && py == (y + dy))
+    )
+    False
+  if spaceOccupied
+    then return (Position (V2 x y))
+    else return (Position (V2 (x + dx) (y + dy)))
+
+grow :: System World ()
+grow = do
   -- grow 
   cmap $ \(Growing period current) -> Growing period (current + 1)
-  cmapM $ \(Position (V2 x y), Growing period current) ->
-    if current `mod` period == 0
-      then do
-      --  newEntity (Position (V2 (x + 1) (y + 1)), Growing period (current + 1))
-           --pure (Position (V2 (x + 1) y), Growing period current)
-        dx            <- liftIO $ randomRIO (-1, 1)
-        dy            <- liftIO $ randomRIO (-1, 1)
-        spaceOccupied <- cfold
-          (\acc (Position (V2 px py), Physical) ->
-            acc || (px == (x + dx) && py == (y + dy))
-          )
-          False
-        if spaceOccupied
-          then return ()
-          else do
-            randomPeriod <- liftIO $ randomRIO (0, growthRate)
-            _            <- grass (x + dx) (y + dy) randomPeriod
-            return ()
-        pure (Position (V2 x y), Growing period current)
-      else pure (Position (V2 x y), Growing period current)
+  cmapM $ \(Position p, Growing period current) -> if current `mod` period == 0
+    then do
+      Position (V2 x' y') <- moveIfPossible (Position p)
+      randomPeriod        <- liftIO $ randomRIO (0, growthRate)
+      unless
+        (Position (V2 x' y') == Position p)
+        (do
+          _ <- grass x' y' randomPeriod
+          return ()
+        )
+      pure (Position p, Growing period current)
+    else pure (Position p, Growing period current)
 
 
 updateVisibleMap :: System World ()
 updateVisibleMap = do
-  --result <- cmapM_
-   -- $ \(Position (V2 x y), Tile c z) -> liftIO (drawCharOnTerminal c x y)
-  --cfold $ (\(VisibleTiles acc) (Position p, Tile c z) -> VisibleTiles (M.insert (Position p) (Tile c z) acc)) mempty
   VisibleTiles newTiles <- cfold
     (\(VisibleTiles acc) (Position p, Tile c z) -> VisibleTiles
       (M.insertWith
@@ -161,26 +188,31 @@ updateVisibleMap = do
   VisibleTiles oldTiles <- get global
   set global (VisibleTiles newTiles)
 
+  changedTiles <- return
+    (M.differenceWith (\new old -> if old == new then Nothing else Just new)
+                      newTiles
+                      oldTiles
+    )
+
+  addLog
+    $  "New/Old/Total changed tiles: "
+    ++ show (length newTiles)
+    ++ "/"
+    ++ show (length oldTiles)
+    ++ "/"
+    ++ show (length changedTiles)
   mapM_
     (\((Position (V2 x y)), (Tile c _)) -> liftIO (drawCharOnTerminal c x y))
-    (M.toList
-      (M.differenceWith (\new old -> if old == new then Nothing else Just new)
-                        newTiles
-                        oldTiles
-      )
-    )
+    (M.toList changedTiles)
+
+addLog :: String -> System World ()
+addLog s = modify global (\(Log xs) -> Log (s : xs))
 
 logging :: System World ()
 logging = do
-  Time turn       <- get global
-  growingEntities <- cfold (\acc (Growing _ _) -> acc + 1) 0
-  modify
-    global
-    (\(Log xs) -> Log
-      ( ("Current turn: " ++ show turn ++ " Entities: " ++ show growingEntities)
-      : xs
-      )
-    )
+  Time turn <- get global
+  entities  <- cfold (\acc (Tile _ _) -> acc + 1) 0
+  addLog ("Current turn: " ++ show turn ++ " Entities: " ++ show entities)
   Log logs <- get global
   case logs of
     x : _ -> do
@@ -200,7 +232,8 @@ drawString s x y = do
 
 loop :: World -> Int -> IO ()
 loop world turns = do
-  runSystem step             world
+  runSystem (step world)     world
+  runSystem move             world
   runSystem updateVisibleMap world
   runSystem logging          world
   onTerminal T.flush
@@ -219,4 +252,4 @@ main = do
   onTerminal $ T.eraseInDisplay T.EraseAll
   runSystem initialise world
   loop world 1000
-  drawCharOnTerminal 'E' 1 21
+  drawCharOnTerminal 'E' 1 22
