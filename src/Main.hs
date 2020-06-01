@@ -14,7 +14,10 @@ module Main where
 import           Apecs
 import           Linear                         ( V2(..) )
 import           Control.Monad
+import           Control.Monad.IO.Class
+import           Control.Monad.Catch
 import qualified System.Terminal               as T
+import           System.Terminal.Internal
 import qualified Data.Map                      as M
 import           System.Random
 
@@ -58,7 +61,7 @@ data Physical = Physical
 instance Component Physical where
   type Storage Physical = Map Physical
 
-data Spawns = Spawns Int
+newtype Spawns = Spawns Int
 instance Component Spawns where
   type Storage Spawns = Map Spawns
 
@@ -90,16 +93,25 @@ instance Component Log where
 data Direction = Horizontal | Vertical
 data FoodType = Meat | Plants deriving (Eq)
 
+totalSimulationTurns :: Int
 totalSimulationTurns = 1200
 
+grassGrowthRate :: Int
 grassGrowthRate = 40
+grassMaxAge :: Int
 grassMaxAge = 1000
+grassFoodAmount :: Int
 grassFoodAmount = 50
 
+bunnyMaxAge :: Int
 bunnyMaxAge = 1000
+bunnyMaxEnergy :: Int
+bunnyStartingEnergy :: Int
 bunnyStartingEnergy = 200
 bunnyMaxEnergy = 400
+bunnyFoodAmount :: Int
 bunnyFoodAmount = 250
+bunnySpawnRate :: Int
 bunnySpawnRate = 200
 
 type Base = (Position, Tile, Physical, TTL) --IsFood not works here?! -- report a bug on apecs
@@ -116,19 +128,33 @@ initialise = do
   _ <- grass 33 3 0
   _ <- grass 33 5 0
   _ <- grass 3 15 0
-  bunnySpawner 15 13
-  bunnySpawner 35 5
-  bunny 14 12
-  bunny 30 5
-  bunny 30 7
-  bunny 30 6
-  bunny 30 8
+  _ <- bunnySpawner 15 13
+  _ <- bunnySpawner 35 5
+  _ <- bunny 14 12
+  _ <- bunny 30 5
+  _ <- bunny 30 7
+  _ <- bunny 30 6
+  _ <- bunny 30 8
   wall 10 10 10 Horizontal
   wall 10 15 10 Horizontal
   wall 10 11 3  Vertical
   wall 20 11 3  Vertical
   return ()
 
+grass
+  :: ( Control.Monad.IO.Class.MonadIO m
+     , Has w m Position
+     , Has w m Tile
+     , Has w m Growing
+     , Has w m TTL
+     , Has w m Physical
+     , Has w m IsFood
+     , Has w m EntityCounter
+     )
+  => Int
+  -> Int
+  -> Int
+  -> SystemT w m Entity
 grass x y p = newEntity
   ( Position (V2 x y)
   , Tile '.' 1
@@ -138,6 +164,21 @@ grass x y p = newEntity
   , IsFood Plants grassFoodAmount
   )
 
+bunny
+  :: ( MonadIO m
+     , Has w m Position
+     , Has w m Tile
+     , Has w m Physical
+     , Has w m TTL
+     , Has w m Moving
+     , Has w m Eats
+     , Has w m Energy
+     , Has w m IsFood
+     , Has w m EntityCounter
+     )
+  => Int
+  -> Int
+  -> SystemT w m Entity
 bunny x y = newEntity
   ( Position (V2 x y)
   , Tile 'b' 5
@@ -149,23 +190,84 @@ bunny x y = newEntity
   , IsFood Meat bunnyFoodAmount
   )
 
+bunnySpawner
+  :: ( MonadIO m
+     , Has w m Position
+     , Has w m Tile
+     , Has w m Spawns
+     , Has w m TTL
+     , Has w m EntityCounter
+     )
+  => Int
+  -> Int
+  -> SystemT w m Entity
 bunnySpawner x y =
   newEntity (Position (V2 x y), Tile 'S' 2, Spawns bunnySpawnRate, TTL 800)
 
+brick
+  :: ( MonadIO m
+     , Has w m Position
+     , Has w m Tile
+     , Has w m Solid
+     , Has w m Physical
+     , Has w m EntityCounter
+     )
+  => Int
+  -> Int
+  -> SystemT w m Entity
 brick x y = newEntity (Position (V2 x y), Tile '#' 10, Solid, Physical)
+
+wall
+  :: ( MonadIO m
+     , Has w m Position
+     , Has w m Tile
+     , Has w m Solid
+     , Has w m Physical
+     , Has w m EntityCounter
+     )
+  => Int
+  -> Int
+  -> Int
+  -> Direction
+  -> SystemT w m ()
 wall xs ys n Horizontal =
   mapM_ (uncurry brick) [ (x, ys) | x <- [xs .. (xs + n)] ]
 wall xs ys n Vertical =
   mapM_ (uncurry brick) [ (xs, y) | y <- [ys .. (ys + n)] ]
 
+emptySpace
+  :: (MonadIO m, Has w m Position, Has w m Tile, Has w m EntityCounter)
+  => Int
+  -> Int
+  -> SystemT w m Entity
 emptySpace x y = newEntity (Position (V2 x y), Tile ' ' 0)
 
+room
+  :: ( MonadIO m
+     , Has w m Position
+     , Has w m Tile
+     , Has w m Solid
+     , Has w m Physical
+     , Has w m EntityCounter
+     )
+  => Int
+  -> Int
+  -> Int
+  -> Int
+  -> SystemT w m ()
 room xmin ymin xmax ymax = mapM_
   (uncurry brick)
   (  [ (x, y) | x <- [xmin, xmax], y <- [ymin .. ymax] ]
   ++ [ (x, y) | x <- [(xmin + 1) .. (xmax - 1)], y <- [ymin, ymax] ]
   )
 
+emptyFloor
+  :: (MonadIO m, Has w m Position, Has w m Tile, Has w m EntityCounter)
+  => Int
+  -> Int
+  -> Int
+  -> Int
+  -> SystemT w m ()
 emptyFloor xmin ymin xmax ymax = mapM_
   (uncurry emptySpace)
   [ (x, y) | x <- [xmin .. xmax], y <- [ymin .. ymax] ]
@@ -196,7 +298,7 @@ move = cmapM $ \(Moving, Position p, Energy e) -> do
     )
 
 eat :: System World ()
-eat = cmapM_ $ \(Eats wantsFood, Position p, Energy e, hungryEntity) ->
+eat = cmapM_ $ \(Eats wantsFood, Position p, Energy _, hungryEntity) ->
   cmapM_ $ \(IsFood hasFood foodAmount, Position p', TTL _, eatenEntity) ->
     when (p == p' && wantsFood == hasFood) $ do
       addLog ("Entity has been eaten: " ++ show eatenEntity)
@@ -210,7 +312,7 @@ spawn = do
   cmapM_ $ \(Spawns t, Position (V2 x y)) -> when
     (turn `mod` t == 0)
     (do
-      bunny x y
+      _ <- bunny x y
       return ()
     )
 
@@ -301,12 +403,13 @@ addLog s = modify global (\(Log xs) -> Log (s : xs))
 logging :: System World ()
 logging = do
   Time turn <- get global
-  entities  <- cfold (\acc (Tile _ _) -> acc + 1) 0
+  entities  <- cfold (\(acc :: Int) (Tile _ _) -> acc + 1) 0
   addLog ("Current turn: " ++ show turn ++ " Entities: " ++ show entities)
   Log logs <- get global
   liftIO (setCursor 0 23)
   mapM_ (liftIO . onTerminal . drawString) (take 1 logs)
 
+setCursor :: (MonadIO m, Control.Monad.Catch.MonadMask m) => Int -> Int -> m ()
 setCursor x y = onTerminal $ T.setCursorPosition $ T.Position y x
 
 drawChar :: T.MonadScreen m => Char -> Int -> Int -> m ()
@@ -314,7 +417,7 @@ drawChar c x y = do
   T.setCursorPosition $ T.Position y x
   T.putChar c
 
-drawString :: T.MonadScreen m => String -> m ()
+drawString :: String -> T.TerminalT LocalTerminal IO ()
 drawString = T.putStringLn
 
 loop :: World -> Int -> IO ()
@@ -329,9 +432,11 @@ loop world turns = do
 
   when (turns > 0) $ loop world (turns - 1)
 
+drawCharOnTerminal :: (MonadIO m, MonadMask m) => Char -> Int -> Int -> m ()
 drawCharOnTerminal c x y = onTerminal (drawChar c x y)
 
-onTerminal f = T.withTerminal $ T.runTerminalT $ f
+onTerminal :: (MonadIO m, MonadMask m) => T.TerminalT LocalTerminal m a -> m a
+onTerminal f = T.withTerminal $ T.runTerminalT f
 
 
 main :: IO ()
