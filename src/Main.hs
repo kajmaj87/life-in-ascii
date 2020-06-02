@@ -9,7 +9,10 @@
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
-module Main where
+module Main
+  ( main
+  )
+where
 
 import           Apecs
 import           Linear                         ( V2(..) )
@@ -315,7 +318,8 @@ spawn = do
       _ <- bunny x y
       return ()
     )
-
+unused :: () -> ()
+unused _ = ()
 
 -- returns current position if move impossible
 moveIfPossible :: Position -> System World Position
