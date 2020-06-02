@@ -1,3 +1,4 @@
+--- Imports/Language settings
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE DataKinds                  #-}
 {-# LANGUAGE FlexibleContexts           #-}
@@ -24,6 +25,32 @@ import           System.Terminal.Internal
 import qualified Data.Map                      as M
 import           System.Random
 
+--- Global components
+newtype VisibleTiles = VisibleTiles (M.Map Position Tile)
+instance Semigroup VisibleTiles where
+  (VisibleTiles a) <> (VisibleTiles b) = VisibleTiles (M.union a b)
+instance Monoid VisibleTiles where
+  mempty = VisibleTiles M.empty
+instance Component VisibleTiles where
+  type Storage VisibleTiles = Global VisibleTiles
+
+newtype Time = Time Int deriving (Show, Num)
+instance Semigroup Time where
+  (<>) = (+)
+instance Monoid Time where
+  mempty = 0
+instance Component Time where
+  type Storage Time = Global Time
+
+newtype Log = Log [String] deriving (Show)
+instance Semigroup Log where
+  (Log a) <> (Log b) = Log (a ++ b)
+instance Monoid Log where
+  mempty = Log []
+instance Component Log where
+  type Storage Log = Global Log
+
+--- Local components
 newtype Position = Position (V2 Int) deriving (Show, Ord, Eq)
 instance Component Position where
   type Storage Position = Map Position
@@ -68,34 +95,25 @@ newtype Spawns = Spawns Int
 instance Component Spawns where
   type Storage Spawns = Map Spawns
 
-newtype VisibleTiles = VisibleTiles (M.Map Position Tile)
-instance Semigroup VisibleTiles where
-  (VisibleTiles a) <> (VisibleTiles b) = VisibleTiles (M.union a b)
-instance Monoid VisibleTiles where
-  mempty = VisibleTiles M.empty
-instance Component VisibleTiles where
-  type Storage VisibleTiles = Global VisibleTiles
+data Brain = Brain
+instance Component Brain where
+  type Storage Brain = Map Brain
 
-newtype Time = Time Int deriving (Show, Num)
-instance Semigroup Time where
-  (<>) = (+)
-instance Monoid Time where
-  mempty = 0
-instance Component Time where
-  type Storage Time = Global Time
+newtype Goal = Goal GoalType
+instance Component Goal where
+  type Storage Goal = Map Goal
 
-newtype Log = Log [String] deriving (Show)
-instance Semigroup Log where
-  (Log a) <> (Log b) = Log (a ++ b)
-instance Monoid Log where
-  mempty = Log []
-instance Component Log where
-  type Storage Log = Global Log
+newtype Action = Action ActionType
+instance Component Action where
+  type Storage Action = Map Action
 
-
+--- Other types
 data Direction = Horizontal | Vertical
 data FoodType = Meat | Plants deriving (Eq)
+data GoalType = Eat
+data ActionType = Move
 
+--- Constants
 totalSimulationTurns :: Int
 totalSimulationTurns = 1200
 
@@ -109,41 +127,15 @@ grassFoodAmount = 50
 bunnyMaxAge :: Int
 bunnyMaxAge = 1000
 bunnyMaxEnergy :: Int
+bunnyMaxEnergy = 400
 bunnyStartingEnergy :: Int
 bunnyStartingEnergy = 200
-bunnyMaxEnergy = 400
 bunnyFoodAmount :: Int
 bunnyFoodAmount = 250
 bunnySpawnRate :: Int
 bunnySpawnRate = 200
 
-type Base = (Position, Tile, Physical, TTL) --IsFood not works here?! -- report a bug on apecs
-type Additional = (Growing, Moving, IsFood, Energy, Eats)
-makeWorld "World" [''Position, ''Tile, ''Solid, ''Physical, ''TTL, ''Growing, ''Moving, ''Eats, ''IsFood, ''Energy, ''Spawns, ''Time, ''VisibleTiles, ''Log]
-
-initialise :: System World ()
-initialise = do
-  room 0 1 40 20
-  emptyFloor 1 2 39 19
-  _ <- grass 15 13 0
-  _ <- grass 35 3 0
-  _ <- grass 35 5 0
-  _ <- grass 33 3 0
-  _ <- grass 33 5 0
-  _ <- grass 3 15 0
-  _ <- bunnySpawner 15 13
-  _ <- bunnySpawner 35 5
-  _ <- bunny 14 12
-  _ <- bunny 30 5
-  _ <- bunny 30 7
-  _ <- bunny 30 6
-  _ <- bunny 30 8
-  wall 10 10 10 Horizontal
-  wall 10 15 10 Horizontal
-  wall 10 11 3  Vertical
-  wall 20 11 3  Vertical
-  return ()
-
+--- Entity templates
 grass
   :: ( Control.Monad.IO.Class.MonadIO m
      , Has w m Position
@@ -275,6 +267,53 @@ emptyFloor xmin ymin xmax ymax = mapM_
   (uncurry emptySpace)
   [ (x, y) | x <- [xmin .. xmax], y <- [ymin .. ymax] ]
 
+--- World creation and type groups for deleting entities
+type Base = (Position, Tile, Physical, TTL) --IsFood not works here?! -- report a bug on apecs
+type Additional = (Growing, Moving, IsFood, Energy, Eats)
+makeWorld "World" [''Position, ''Tile, ''Solid, ''Physical, ''TTL, ''Growing, ''Moving, ''Eats, ''IsFood, ''Energy, ''Spawns, ''Brain, ''Goal, ''Action, ''Time, ''VisibleTiles, ''Log]
+
+--- Terminal functions
+setCursor :: (MonadIO m, Control.Monad.Catch.MonadMask m) => Int -> Int -> m ()
+setCursor x y = onTerminal $ T.setCursorPosition $ T.Position y x
+
+drawChar :: T.MonadScreen m => Char -> Int -> Int -> m ()
+drawChar c x y = do
+  T.setCursorPosition $ T.Position y x
+  T.putChar c
+
+drawString :: String -> T.TerminalT LocalTerminal IO ()
+drawString = T.putStringLn
+
+drawCharOnTerminal :: (MonadIO m, MonadMask m) => Char -> Int -> Int -> m ()
+drawCharOnTerminal c x y = onTerminal (drawChar c x y)
+
+onTerminal :: (MonadIO m, MonadMask m) => T.TerminalT LocalTerminal m a -> m a
+onTerminal f = T.withTerminal $ T.runTerminalT f
+
+--- Systems
+initialise :: System World ()
+initialise = do
+  room 0 1 40 20
+  emptyFloor 1 2 39 19
+  _ <- grass 15 13 0
+  _ <- grass 35 3 0
+  _ <- grass 35 5 0
+  _ <- grass 33 3 0
+  _ <- grass 33 5 0
+  _ <- grass 3 15 0
+  _ <- bunnySpawner 15 13
+  _ <- bunnySpawner 35 5
+  _ <- bunny 14 12
+  _ <- bunny 30 5
+  _ <- bunny 30 7
+  _ <- bunny 30 6
+  _ <- bunny 30 8
+  wall 10 10 10 Horizontal
+  wall 10 15 10 Horizontal
+  wall 10 11 3  Vertical
+  wall 20 11 3  Vertical
+  return ()
+
 step :: World -> System World ()
 step world = do
   modify global (\(Time turns) -> Time (turns + 1))
@@ -292,7 +331,7 @@ step world = do
   return ()
 
 move :: System World ()
-move = cmapM $ \(Moving, Position p, Energy e) -> do
+move = cmapM $ \(Action Move, Moving, Position p, Energy e) -> do
   newPosition <- moveIfPossible (Position p)
   return
     ( Moving
@@ -318,8 +357,11 @@ spawn = do
       _ <- bunny x y
       return ()
     )
-unused :: () -> ()
-unused _ = ()
+think :: System World ()
+think = do
+  cmapM_ $ \(Brain, Moving, Goal Eat, entity) -> do
+    set entity (Action Move)
+    return ()
 
 -- returns current position if move impossible
 moveIfPossible :: Position -> System World Position
@@ -413,21 +455,12 @@ logging = do
   liftIO (setCursor 0 23)
   mapM_ (liftIO . onTerminal . drawString) (take 1 logs)
 
-setCursor :: (MonadIO m, Control.Monad.Catch.MonadMask m) => Int -> Int -> m ()
-setCursor x y = onTerminal $ T.setCursorPosition $ T.Position y x
-
-drawChar :: T.MonadScreen m => Char -> Int -> Int -> m ()
-drawChar c x y = do
-  T.setCursorPosition $ T.Position y x
-  T.putChar c
-
-drawString :: String -> T.TerminalT LocalTerminal IO ()
-drawString = T.putStringLn
-
+--- Main Loop
 loop :: World -> Int -> IO ()
 loop world turns = do
   runSystem (step world)     world
   runSystem spawn            world
+  runSystem think            world
   runSystem move             world
   runSystem eat              world
   runSystem updateVisibleMap world
@@ -435,13 +468,6 @@ loop world turns = do
   onTerminal T.flush
 
   when (turns > 0) $ loop world (turns - 1)
-
-drawCharOnTerminal :: (MonadIO m, MonadMask m) => Char -> Int -> Int -> m ()
-drawCharOnTerminal c x y = onTerminal (drawChar c x y)
-
-onTerminal :: (MonadIO m, MonadMask m) => T.TerminalT LocalTerminal m a -> m a
-onTerminal f = T.withTerminal $ T.runTerminalT f
-
 
 main :: IO ()
 main = do
