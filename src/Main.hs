@@ -16,6 +16,7 @@ module Main
 where
 
 import           Apecs
+import           Apecs.Core
 import           Linear                         ( V2(..) )
 import           Control.Monad
 import           Control.Monad.IO.Class
@@ -113,6 +114,11 @@ data FoodType = Meat | Plants deriving (Eq)
 data GoalType = Eat
 data ActionType = Move
 
+--- World creation and type groups for deleting entities
+type Base = (Position, Tile, Physical, TTL)
+type Additional = (Growing, Moving, IsFood, Energy, Eats, Brain, Goal, Action)
+makeWorld "World" [''Position, ''Tile, ''Solid, ''Physical, ''TTL, ''Growing, ''Moving, ''Eats, ''IsFood, ''Energy, ''Spawns, ''Brain, ''Goal, ''Action, ''Time, ''VisibleTiles, ''Log]
+
 --- Constants
 totalSimulationTurns :: Int
 totalSimulationTurns = 1200
@@ -166,6 +172,7 @@ bunny
      , Has w m Physical
      , Has w m TTL
      , Has w m Moving
+     , Has w m Brain
      , Has w m Eats
      , Has w m Energy
      , Has w m IsFood
@@ -179,9 +186,7 @@ bunny x y = newEntity
   , Tile 'b' 5
   , Physical
   , TTL bunnyMaxAge
-  , Moving
-  , Eats Plants
-  , Energy bunnyStartingEnergy
+  , (Moving, Brain, Eats Plants, Energy bunnyStartingEnergy)
   , IsFood Meat bunnyFoodAmount
   )
 
@@ -266,11 +271,6 @@ emptyFloor
 emptyFloor xmin ymin xmax ymax = mapM_
   (uncurry emptySpace)
   [ (x, y) | x <- [xmin .. xmax], y <- [ymin .. ymax] ]
-
---- World creation and type groups for deleting entities
-type Base = (Position, Tile, Physical, TTL) --IsFood not works here?! -- report a bug on apecs
-type Additional = (Growing, Moving, IsFood, Energy, Eats)
-makeWorld "World" [''Position, ''Tile, ''Solid, ''Physical, ''TTL, ''Growing, ''Moving, ''Eats, ''IsFood, ''Energy, ''Spawns, ''Brain, ''Goal, ''Action, ''Time, ''VisibleTiles, ''Log]
 
 --- Terminal functions
 setCursor :: (MonadIO m, Control.Monad.Catch.MonadMask m) => Int -> Int -> m ()
