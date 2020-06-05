@@ -23,6 +23,7 @@ executable life-in-ascii
     terminal,
     random,
     containers,
+    array,
     exceptions
   ghc-options: 
     -Wall

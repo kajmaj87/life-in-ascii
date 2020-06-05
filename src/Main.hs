@@ -1,7 +1,5 @@
 --- Imports/Language settings
 {-# LANGUAGE OverloadedStrings          #-}
-{-# LANGUAGE DataKinds                  #-}
-{-# LANGUAGE FlexibleContexts           #-}
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE MultiParamTypeClasses      #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
@@ -9,6 +7,13 @@
 {-# LANGUAGE TypeApplications           #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE DerivingStrategies         #-}
+{-# LANGUAGE DerivingVia                #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE FlexibleContexts #-}
+
 
 module Main
   ( main
@@ -16,7 +21,7 @@ module Main
 where
 
 import           Apecs
-import           Apecs.Core
+import           Apecs.Experimental.Reactive
 import           Linear                         ( V2(..) )
 import           Control.Monad
 import           Control.Monad.IO.Class
@@ -24,6 +29,8 @@ import           Control.Monad.Catch
 import qualified System.Terminal               as T
 import           System.Terminal.Internal
 import qualified Data.Map                      as M
+import qualified Data.Set                      as S
+import           Data.Array
 import           System.Random
 
 --- Global components
@@ -52,9 +59,17 @@ instance Component Log where
   type Storage Log = Global Log
 
 --- Local components
+gameMaxX :: Int
+gameMaxX = 40
+gameMaxY :: Int
+gameMaxY = 20
+instance Bounded Position where
+  minBound = Position (V2 0 0)
+  maxBound = Position (V2 gameMaxX gameMaxY)
 newtype Position = Position (V2 Int) deriving (Show, Ord, Eq)
+  deriving (Ix) via (V2 Int)
 instance Component Position where
-  type Storage Position = Map Position
+  type Storage Position = Reactive (IxMap Position) (Apecs.Map Position)
 
 data Tile = Tile Char Int deriving (Show, Eq)
 instance Component Tile where
@@ -115,13 +130,19 @@ data GoalType = Eat
 data ActionType = Move
 
 --- World creation and type groups for deleting entities
-type Base = (Position, Tile, Physical, TTL)
-type Additional = (Growing, Moving, IsFood, Energy, Eats, Brain, Goal, Action)
+type All
+  = ( Position
+    , Tile
+    , Physical
+    , TTL
+    , (Growing, Moving, IsFood, Energy, Eats, Brain, Goal, Action)
+    )
 makeWorld "World" [''Position, ''Tile, ''Solid, ''Physical, ''TTL, ''Growing, ''Moving, ''Eats, ''IsFood, ''Energy, ''Spawns, ''Brain, ''Goal, ''Action, ''Time, ''VisibleTiles, ''Log]
 
 --- Constants
+
 totalSimulationTurns :: Int
-totalSimulationTurns = 1200
+totalSimulationTurns = 2200
 
 grassGrowthRate :: Int
 grassGrowthRate = 40
@@ -293,7 +314,7 @@ onTerminal f = T.withTerminal $ T.runTerminalT f
 --- Systems
 initialise :: System World ()
 initialise = do
-  room 0 1 40 20
+  room 0 1 gameMaxX gameMaxY
   emptyFloor 1 2 39 19
   _ <- grass 15 13 0
   _ <- grass 35 3 0
@@ -319,9 +340,9 @@ step world = do
   modify global (\(Time turns) -> Time (turns + 1))
   -- get older and die eventually
   cmap $ \(TTL turns) ->
-    if turns < 0 then Right $ Not @Additional else Left $ TTL (turns - 1)
+    if turns < 0 then Right $ Not @All else Left $ TTL (turns - 1)
   cmap $ \(TTL turns) ->
-    if turns < 0 then Right $ Not @Base else Left $ TTL (turns - 1)
+    if turns < 0 then Right $ Not @All else Left $ TTL (turns - 1)
   -- die if no energy
   cmap $ \(Energy e) -> if e < 0 then Right $ Not @Moving else Left $ Energy e
   cmap $ \(Energy e, Tile c z, TTL turns) -> if e < 0
@@ -377,35 +398,41 @@ moveIfPossible (Position (V2 x y)) = do
     then return (Position (V2 x y))
     else return (Position (V2 (x + dx) (y + dy)))
 
-getGrassPositionIfPossible :: Position -> System World Position
-getGrassPositionIfPossible (Position (V2 x y)) = do
-  dx            <- liftIO $ randomRIO (-1, 1)
-  dy            <- liftIO $ randomRIO (-1, 1)
-  spaceOccupied <- cfold
-    (\acc (Position (V2 px py), Physical) ->
-      acc || (px == (x + dx) && py == (y + dy))
-    )
-    False
-  if spaceOccupied
-    then return (Position (V2 x y))
-    else return (Position (V2 (x + dx) (y + dy)))
+entitiesAtPosition :: V2 Int -> System World [Entity]
+entitiesAtPosition c = withReactive $ ixLookup (Position c)
+
+hasAny :: forall c . (Get World IO c) => [Entity] -> System World Bool
+hasAny = fmap (not . null) . filterM (`exists` Proxy @c)
+
+getRandomNearbyPosition :: Position -> System World Position
+getRandomNearbyPosition (Position (V2 x y)) = do
+  dx <- liftIO $ randomRIO (-1, 1)
+  dy <- liftIO $ randomRIO (-1, 1)
+  return (Position (V2 (x + dx) (y + dy)))
 
 grow :: System World ()
 grow = do
   -- grow 
-  cmap $ \(Growing period current) -> Growing period (current + 1)
-  cmapM $ \(Position p, Growing period current) -> if current `mod` period == 0
-    then do
-      Position (V2 x' y') <- getGrassPositionIfPossible (Position p)
-      randomPeriod        <- liftIO $ randomRIO (0, grassGrowthRate)
+  cmap $ \(Growing p current) -> Growing p (current + 1)
+  possibleGrowthPositions <- cfold
+    (\acc (Position p, Growing period current) ->
+      if current `mod` period == 0 then S.insert (Position p) acc else acc
+    )
+    mempty
+  mapM_
+    (\(Position p) -> do
+      Position (V2 x y) <- getRandomNearbyPosition (Position p)
+      entities          <- entitiesAtPosition (V2 x y)
+      isPhysical        <- hasAny @Physical entities
       unless
-        (Position (V2 x' y') == Position p)
+        isPhysical
         (do
-          _ <- grass x' y' randomPeriod
+          randomPeriod <- liftIO $ randomRIO (0, grassGrowthRate)
+          _            <- grass x y randomPeriod
           return ()
         )
-      pure (Position p, Growing period current)
-    else pure (Position p, Growing period current)
+    )
+    possibleGrowthPositions
 
 
 updateVisibleMap :: System World ()
@@ -449,7 +476,7 @@ addLog s = modify global (\(Log xs) -> Log (s : xs))
 logging :: System World ()
 logging = do
   Time turn <- get global
-  entities  <- cfold (\(acc :: Int) (Tile _ _) -> acc + 1) 0
+  entities  <- cfold (\(acc :: Int) (Growing _ _) -> acc + 1) 0
   addLog ("Current turn: " ++ show turn ++ " Entities: " ++ show entities)
   Log logs <- get global
   liftIO (setCursor 0 23)
