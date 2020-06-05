@@ -142,7 +142,7 @@ makeWorld "World" [''Position, ''Tile, ''Solid, ''Physical, ''TTL, ''Growing, ''
 --- Constants
 
 totalSimulationTurns :: Int
-totalSimulationTurns = 2200
+totalSimulationTurns = 200
 
 grassGrowthRate :: Int
 grassGrowthRate = 40
@@ -195,6 +195,7 @@ bunny
      , Has w m Moving
      , Has w m Brain
      , Has w m Eats
+     , Has w m Goal
      , Has w m Energy
      , Has w m IsFood
      , Has w m EntityCounter
@@ -207,7 +208,8 @@ bunny x y = newEntity
   , Tile 'b' 5
   , Physical
   , TTL bunnyMaxAge
-  , (Moving, Brain, Eats Plants, Energy bunnyStartingEnergy)
+  , Moving
+  , (Brain, Goal Eat, Eats Plants, Energy bunnyStartingEnergy)
   , IsFood Meat bunnyFoodAmount
   )
 
@@ -355,12 +357,12 @@ move :: System World ()
 move = cmapM $ \(Action Move, Moving, Position p, Energy e) -> do
   newPosition <- moveIfPossible (Position p)
   return
-    ( Moving
-    , newPosition
+    ( newPosition
     , if Position p == newPosition then Energy e else Energy (e - 1)
     )
 
 eat :: System World ()
+-- TODO Change double loop to entitiesAtPosition and hasAny
 eat = cmapM_ $ \(Eats wantsFood, Position p, Energy _, hungryEntity) ->
   cmapM_ $ \(IsFood hasFood foodAmount, Position p', TTL _, eatenEntity) ->
     when (p == p' && wantsFood == hasFood) $ do
@@ -378,11 +380,11 @@ spawn = do
       _ <- bunny x y
       return ()
     )
+
 think :: System World ()
-think = do
-  cmapM_ $ \(Brain, Moving, Goal Eat, entity) -> do
-    set entity (Action Move)
-    return ()
+think = cmapM_ $ \(Brain, Moving, Goal Eat, entity) -> do
+  set entity (Action Move)
+  return ()
 
 -- returns current position if move impossible
 moveIfPossible :: Position -> System World Position
@@ -423,9 +425,9 @@ grow = do
     (\(Position p) -> do
       Position (V2 x y) <- getRandomNearbyPosition (Position p)
       entities          <- entitiesAtPosition (V2 x y)
-      isPhysical        <- hasAny @Physical entities
+      isGrowthForbidden <- hasAny @Physical entities
       unless
-        isPhysical
+        isGrowthForbidden
         (do
           randomPeriod <- liftIO $ randomRIO (0, grassGrowthRate)
           _            <- grass x y randomPeriod
