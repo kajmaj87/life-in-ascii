@@ -33,3 +33,20 @@ executable life-in-ascii
     -Wincomplete-record-updates
     -Wredundant-constraints
     -Wpartial-fields
+
+test-suite unit-tests
+  type:          exitcode-stdio-1.0
+  main-is:       Spec.hs
+  hs-source-dirs: test
+  build-depends: base
+               , life-in-ascii
+               , hspec
+               , hspec-discover
+
+--test-suite integration-tests
+--  type:          exitcode-stdio-1.0
+--  main-is:       Spec.hs
+--  hs-source-dirs: test/integration
+--  build-depends: base
+--               , example
+--               , hspec

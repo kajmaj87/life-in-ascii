@@ -353,8 +353,45 @@ step world = do
   liftIO $ runSystem grow world
   return ()
 
+--findNearestFoodInRange
+--  :: FoodType -> Int -> Position -> System World (Maybe Position)
+--findNearestFoodInRange t r (Position (V2 x y)) =
+--  let distance a b = (a - x)^2 + (b - y)^2
+--      eligableCoords =
+--          [ (V2 x' y')
+--          | x' <- [x - r .. x + r]
+--          , y' <- [y - r .. y + r]
+--          , distance x' y' <= r ^ 2
+--          ]
+--      positionHasFood   = positionHasAny @IsFood
+--      positionsWithFood = filter (\(p, (System World hasFood)) -> hasFood) . map (\p -> (p, positionHasFood p)) eligableCoords
+--  in  foldl' (\bestPoint p -> if uncurry distance bestPoint > uncurry distance p then uncurry distance p else uncurry distance bestPoint) (head positionsWithFood) 
+
+distance :: Position -> V2 Int -> Int
+distance (Position (V2 x y)) (V2 x' y') = (x - x') ^ 2 + (y - y') ^ 2
+
+best :: (a -> a -> Bool) -> [a] -> Maybe a
+best _ [x     ] = Just x
+best f (x : xs) = best' x xs where
+  better a b = if f a b then a else b
+  best' bestSoFar (x : xs) = best' (better bestSoFar x) xs
+  best' bestSoFar []       = Just bestSoFar
+best _ [] = Nothing
+
+findClosestPoint :: Position -> [V2 Int] -> Maybe Position
+findClosestPoint (Position (V2 x y)) positions =
+  best (\a b -> distance' a < distance' b) positions
+    >>= \p -> return (Position p)
+  where distance' = distance (Position (V2 x y))
+
+findClosestPoint' :: Position -> [V2 Int] -> Maybe Position
+findClosestPoint' (Position pos) (p : ps) = Just
+  (Position (foldr (\a b -> if distance' a < distance' b then a else b) p ps))
+  where distance' = distance (Position pos)
+findClostestPoint' _ _ = Nothing
+
 move :: System World ()
-move = cmapM $ \(Action Move, Moving, Position p, Energy e) -> do
+move = cmapM $ \(Action Move, Moving, Goal g, Position p, Energy e) -> do
   newPosition <- moveIfPossible (Position p)
   return
     ( newPosition
@@ -405,6 +442,9 @@ entitiesAtPosition c = withReactive $ ixLookup (Position c)
 
 hasAny :: forall c . (Get World IO c) => [Entity] -> System World Bool
 hasAny = fmap (not . null) . filterM (`exists` Proxy @c)
+
+--positionHasAny :: forall c . (Get World IO c) => V2 Int -> System World Bool
+--positionHasAny = entitiesAtPosition =>> hasAny
 
 getRandomNearbyPosition :: Position -> System World Position
 getRandomNearbyPosition (Position (V2 x y)) = do
