@@ -1,0 +1,63 @@
+name:                life-in-ascii
+version:             0.1.0.0
+github:              "kajmaj87/life-in-ascii"
+license:             BSD3
+author:              "kajmaj"
+maintainer:          "kajmaj87@github"
+copyright:           "2020 Author name here"
+
+extra-source-files:
+- README.md
+
+# Metadata used when publishing your package
+# synopsis:            Short description of your package
+# category:            Web
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description:         Please see the README on GitHub at <https://github.com/kajmaj87/life-in-ascii#readme>
+
+dependencies:
+- base >= 4.7 && < 5
+- apecs
+- linear
+- terminal
+- random
+- containers
+- array
+- exceptions
+
+library:
+  source-dirs: src
+
+executables:
+  life-in-ascii-exe:
+    main:                Main.hs
+    source-dirs:         app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    - -Wall
+    - -Werror
+    - -Wcompat
+    - -Wincomplete-uni-patterns
+    - -Wincomplete-record-updates
+    - -Wredundant-constraints
+    - -Wpartial-fields
+    dependencies:
+    - life-in-ascii
+
+tests:
+  life-in-ascii-test:
+    main:                Spec.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - life-in-ascii
+    - hspec
+    - hspec-discover

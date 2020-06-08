@@ -1,11 +1,9 @@
-module TestMain where
+module MoveSpec where
 
 import           Test.Hspec
-import           Main
+import           Systems.Move
 
 spec :: Spec
 spec = do
   describe "Find nearest" $ do
     it "returns same object as reference if it is in list" $ do
-
-

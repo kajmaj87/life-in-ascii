@@ -1,0 +1,52 @@
+name:                life-in-ascii
+version:             0.1.0.0
+-- synopsis:
+-- description:
+homepage:            https://github.com/githubuser/life-in-ascii#readme
+license:             BSD3
+license-file:        LICENSE
+author:              Author name here
+maintainer:          example@example.com
+copyright:           2020 Author name here
+category:            Web
+build-type:          Simple
+cabal-version:       >=1.10
+extra-source-files:  README.md
+
+executable life-in-ascii
+  hs-source-dirs:      src
+  main-is:             Main.hs
+  default-language:    Haskell2010
+  build-depends:       base >= 4.7 && < 5,
+    apecs,
+    linear,
+    terminal,
+    random,
+    containers,
+    array,
+    exceptions
+  ghc-options: 
+    -Wall
+    -Werror
+    -Wcompat
+    -Wincomplete-uni-patterns
+    -Wincomplete-record-updates
+    -Wredundant-constraints
+    -Wpartial-fields
+
+test-suite unit-tests
+  type:          exitcode-stdio-1.0
+  main-is:       Spec.hs
+  hs-source-dirs: test
+  build-depends: base
+               , life-in-ascii
+               , hspec
+               , hspec-discover
+
+--test-suite integration-tests
+--  type:          exitcode-stdio-1.0
+--  main-is:       Spec.hs
+--  hs-source-dirs: test/integration
+--  build-depends: base
+--               , example
+--               , hspec
